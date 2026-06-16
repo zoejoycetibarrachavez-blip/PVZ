@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PvZ v7.7</title>
+
+<style>
+body{
+margin:0;
+background:#0b3d2e;
+font-family:Arial;
+overflow:hidden;
+color:white;
+}
+
+/* UI derecha */
+#ui{
+position:fixed;
+top:0;
+right:0;
+width:220px;
+height:100%;
+background:#00000080;
+padding:10px;
+box-sizing:border-box;
+backdrop-filter:blur(8px);
+}
+
+button{
+width:100%;
+padding:10px;
+margin:5px 0;
+border:none;
+border-radius:10px;
+cursor:pointer;
+background:#22c55e;
+color:white;
+}
+
+/* canvas */
+canvas{
+display:block;
+margin:auto;
+background:#14532d;
+border:2px solid #0ea5e9;
+}
+
+/* PAUSA */
+#pauseMenu{
+position:fixed;
+top:0;
+left:0;
+width:100%;
+height:100%;
+background:rgba(0,0,0,0.6);
+display:none;
+align-items:center;
+justify-content:center;
+flex-direction:column;
+z-index:20;
+font-size:40px;
+}
+
+/* GAME OVER */
+#gameOver{
+position:fixed;
+top:0;
+left:0;
+width:100%;
+height:100%;
+background:rgba(0,0,0,0.75);
+display:none;
+align-items:center;
+justify-content:center;
+flex-direction:column;
+z-index:30;
+font-size:45px;
+}
+</style>
+</head>
+
+<body>
+
+<!-- UI -->
+<div id="ui">
+🌞 Sol: <span id="sun">150</span><br>
+❤️ Vida: <span id="life">5</span><br>
+📈 Nivel: <span id="level">1</span><br>
+
+<button onclick="selectPlant('pea')">🌱 Guisante</button>
+<button onclick="selectPlant('ice')">❄️ Hielo</button>
+<button onclick="selectPlant('bomb')">💣 Bomba</button>
+<button onclick="selectPlant('sun')">🌻 Girasol</button>
+<button onclick="toggleShovel()">🪏 Pala</button>
+<button onclick="wave()">🧟 Oleada</button>
+<button onclick="togglePause()">⏸️ Pausa</button>
+</div>
+
+<!-- PAUSA -->
+<div id="pauseMenu">
+PAUSA
+<button onclick="togglePause()">Reanudar</button>
+</div>
+
+<!-- GAME OVER -->
+<div id="gameOver">
+GAME OVER
+<button onclick="restartGame()">🔁 Reiniciar</button>
+</div>
+
+<canvas id="game" width="800" height="500"></canvas>
+
+<script>
+
+const c=document.getElementById("game");
+const ctx=c.getContext("2d");
+
+const cols=10;
+const rows=5;
+const cw=80;
+const ch=100;
+
+let sun=150;
+let life=5;
+let level=1;
+
+let paused=false;
+let shovelMode=false;
+
+let plants=[];
+let zombies=[];
+let bullets=[];
+let suns=[];
+let explosions=[];
+let placing=null;
+
+/* =========================
+   PAUSA
+========================= */
+function togglePause(){
+if(gameOverState) return;
+paused=!paused;
+document.getElementById("pauseMenu").style.display=
+paused?"flex":"none";
+}
+
+/* =========================
+   PALA
+========================= */
+function toggleShovel(){
+placing=null;
+shovelMode=!shovelMode;
+}
+
+/* =========================
+   PLANTAS
+========================= */
+class Plant{
+constructor(type,col,row,x,y){
+this.type=type;
+this.col=col;
+this.row=row;
+this.x=x;
+this.y=y;
+
+this.hp=6;
+this.cd=0;
+this.sunT=0;
+this.dead=false;
+}
+
+update(){
+if(paused || gameOverState) return;
+
+/* girasol */
+if(this.type==="sun"){
+this.sunT++;
+if(this.sunT>=120){
+suns.push({x:this.x,y:this.y-20,life:200,collected:false});
+this.sunT=0;
+}
+}
+
+/* bomba */
+if(this.type==="bomb"){
+this.cd++;
+if(this.cd>90){
+explode(this.x,this.y,this.row);
+this.dead=true;
+}
+}
+
+/* ataque */
+if(this.type==="pea" || this.type==="ice"){
+this.cd--;
+
+let target=zombies.find(z=>z.row===this.row && z.col>this.col);
+
+if(target && this.cd<=0){
+bullets.push(new Bullet(this.x,this.y,this.row,this.type));
+this.cd=50;
+}
+}
+}
+
+draw(){
+let color=
+this.type==="sun"?"#facc15":
+this.type==="ice"?"#60a5fa":
+this.type==="bomb"?"#ef4444":"#22c55e";
+
+ctx.fillStyle=color;
+ctx.beginPath();
+ctx.roundRect(this.x-15,this.y-15,30,30,8);
+ctx.fill();
+}
+}
+
+/* =========================
+   ZOMBIES
+========================= */
+class Zombie{
+constructor(row){
+this.col=9;
+this.row=row;
+
+this.x=this.col*cw+40;
+this.y=row*ch+50;
+
+this.hp=2+level*0.5;
+this.speed=0.2+level*0.01;
+
+this.slow=0;
+this.dead=false;
+}
+
+update(){
+if(paused || gameOverState) return;
+
+let speed=this.speed;
+if(this.slow>0){
+speed*=0.4;
+this.slow--;
+}
+
+let target=plants.find(p=>p.row===this.row && p.col===this.col);
+
+if(target){
+target.hp-=0.03;
+if(target.hp<=0) target.dead=true;
+}else{
+this.x-=speed;
+this.col=this.x/cw;
+}
+
+if(this.x<0){
+life--;
+this.dead=true;
+
+if(life<=0){
+triggerGameOver();
+}
+}
+}
+
+freeze(){
+this.slow=180;
+}
+
+draw(){
+ctx.fillStyle="#ef4444";
+ctx.fillRect(this.x,this.y,28,38);
+
+ctx.fillStyle="white";
+ctx.fillRect(this.x+6,this.y+12,5,5);
+ctx.fillRect(this.x+17,this.y+12,5,5);
+}
+}
+
+/* =========================
+   BALAS
+========================= */
+class Bullet{
+constructor(x,y,row,type){
+this.x=x;
+this.y=y;
+this.row=row;
+this.type=type;
+this.dead=false;
+}
+
+update(){
+if(paused || gameOverState) return;
+
+this.x+=4;
+
+for(let z of zombies){
+if(z.row===this.row && this.x>z.x && this.x<z.x+30){
+
+z.hp--;
+
+if(this.type==="ice") z.freeze();
+
+this.dead=true;
+
+if(z.hp<=0){
+z.dead=true;
+sun+=10;
+}
+}
+}
+}
+
+draw(){
+ctx.fillStyle=this.type==="ice"?"#60a5fa":"#facc15";
+ctx.beginPath();
+ctx.arc(this.x,this.y,4,0,Math.PI*2);
+ctx.fill();
+}
+}
+
+/* =========================
+   EXPLOSIÓN
+========================= */
+function explode(x,y,row){
+
+explosions.push({x,y,t:25});
+
+for(let z of zombies){
+if(z.row===row && Math.abs(z.x-x)<90){
+z.dead=true;
+sun+=15;
+}
+}
+}
+
+/* =========================
+   CLICK
+========================= */
+c.addEventListener("click",(e)=>{
+
+if(paused || gameOverState) return;
+
+let r=c.getBoundingClientRect();
+let x=e.clientX-r.left;
+let y=e.clientY-r.top;
+
+/* soles */
+for(let s of suns){
+if(!s.collected && Math.hypot(s.x-x,s.y-y)<20){
+sun+=25;
+s.collected=true;
+}
+}
+
+/* PALA */
+if(shovelMode){
+
+let col=Math.floor(x/cw);
+let row=Math.floor(y/ch);
+
+for(let p of plants){
+if(p.col===col && p.row===row){
+p.dead=true;
+}
+}
+
+shovelMode=false;
+return;
+}
+
+if(!placing) return;
+
+let col=Math.floor(x/cw);
+let row=Math.floor(y/ch);
+
+let px=col*cw+40;
+let py=row*ch+50;
+
+let cost=
+placing==="sun"?50:
+placing==="ice"?70:
+placing==="bomb"?90:50;
+
+if(sun>=cost){
+plants.push(new Plant(placing,col,row,px,py));
+sun-=cost;
+}
+
+placing=null;
+});
+
+function selectPlant(t){
+placing=t;
+shovelMode=false;
+}
+
+/* =========================
+   OLEADAS
+========================= */
+function wave(){
+if(gameOverState) return;
+
+let count=4+level;
+
+for(let i=0;i<count;i++){
+setTimeout(()=>{
+let r=Math.floor(Math.random()*rows);
+zombies.push(new Zombie(r));
+},i*500);
+}
+
+level++;
+}
+
+/* =========================
+   GAME OVER
+========================= */
+let gameOverState=false;
+
+function triggerGameOver(){
+gameOverState=true;
+paused=true;
+document.getElementById("gameOver").style.display="flex";
+document.getElementById("pauseMenu").style.display="none";
+}
+
+/* =========================
+   REINICIO
+========================= */
+function restartGame(){
+
+sun=150;
+life=5;
+level=1;
+
+plants=[];
+zombies=[];
+bullets=[];
+suns=[];
+explosions=[];
+
+placing=null;
+shovelMode=false;
+paused=false;
+gameOverState=false;
+
+document.getElementById("gameOver").style.display="none";
+document.getElementById("pauseMenu").style.display="none";
+
+wave();
+}
+
+/* =========================
+   LOOP
+========================= */
+function loop(){
+
+ctx.clearRect(0,0,800,500);
+
+/* grid */
+for(let x=0;x<cols;x++){
+for(let y=0;y<rows;y++){
+ctx.fillStyle=(x+y)%2?"#14532d":"#166534";
+ctx.fillRect(x*cw,y*ch,cw,ch);
+}
+}
+
+/* update */
+plants.forEach(p=>p.update());
+zombies.forEach(z=>z.update());
+bullets.forEach(b=>b.update());
+
+/* draw */
+plants.forEach(p=>p.draw());
+zombies.forEach(z=>z.draw());
+bullets.forEach(b=>b.draw());
+
+for(let s of suns){
+ctx.fillStyle="#facc15";
+ctx.beginPath();
+ctx.arc(s.x,s.y,10,0,Math.PI*2);
+ctx.fill();
+}
+
+for(let e of explosions){
+ctx.fillStyle="rgba(255,80,80,0.4)";
+ctx.beginPath();
+ctx.arc(e.x,e.y,e.t*2,0,Math.PI*2);
+ctx.fill();
+e.t--;
+}
+
+explosions=explosions.filter(e=>e.t>0);
+plants=plants.filter(p=>!p.dead);
+zombies=zombies.filter(z=>!z.dead);
+bullets=bullets.filter(b=>!b.dead);
+suns=suns.filter(s=>!s.collected && s.life>0);
+
+/* UI */
+document.getElementById("sun").textContent=sun;
+document.getElementById("life").textContent=life;
+document.getElementById("level").textContent=level;
+
+requestAnimationFrame(loop);
+}
+
+loop();
+wave();
+setInterval(wave,20000);
+
+</script>
+
+</body>
+</html>
